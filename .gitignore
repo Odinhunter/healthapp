@@ -40,3 +40,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# graphify regenerable cache (the graph itself stays tracked)
+graphify-out/cache/
