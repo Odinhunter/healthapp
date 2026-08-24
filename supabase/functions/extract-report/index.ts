@@ -1,4 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2?target=deno'
+import {
+  buildResolver,
+  resolveBiomarker,
+  demoteIntraReportCollisions,
+} from '../_shared/canonicalResolver.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -152,6 +157,8 @@ Rules:
 - status from value vs reference range, if no range use normal
 - critical only for severely abnormal values
 - Extract every test result on every page no exceptions
+- NEVER merge two distinct analytes onto one canonical_name. BUN and Urea are different tests (Urea = BUN x 2.14), RDW-CV (%) and RDW-SD (fL) are different measurements, TG (triglycerides) and Tg (thyroglobulin) are different tests. If a report prints both members of such a pair, emit both as separate entries with distinct canonical names.
+- If unsure of the standard name, still return the exact printed name in raw_name — a raw_name that resolves is better than a confident wrong canonical_name
 - Return ONLY the JSON, zero characters outside it`
 
     // 10. Call Claude API
@@ -234,40 +241,55 @@ Rules:
       return errorResponse(userMessage, 422)
     }
 
-    // 13. Fetch canonical names + aliases for fuzzy matching
+    // 13. Fetch canonical names + aliases for fuzzy matching.
+    //     ORDER BY is not required for correctness any more — the resolver
+    //     refuses to pick between contested aliases rather than letting the
+    //     last row win — but it keeps logs reproducible.
     const { data: canonicalRows } = await supabaseAdmin
       .from('canonical_biomarkers')
       .select('canonical_name, aliases')
+      .order('canonical_name', { ascending: true })
 
-    const validNames = new Set(
-      (canonicalRows ?? []).map((r: any) => r.canonical_name)
+    const resolver = buildResolver(canonicalRows ?? [])
+
+    // Surfaces alias data that needs cleaning up in canonical_biomarkers.
+    const contested = resolver.contestedAliases()
+    if (contested.length > 0) {
+      console.warn(
+        `[extract-report] ${contested.length} contested alias(es) in canonical_biomarkers: ${contested.join(', ')}`
+      )
+    }
+
+    // 14. Resolve biomarkers, then demote intra-report collisions.
+    //     Two analytes landing on one canonical name inside a single report
+    //     would chart as consecutive readings and fabricate a trend, so
+    //     neither is kept. See _shared/canonicalResolver.ts for the detail.
+    const allBiomarkers = extracted.biomarkers ?? []
+    const wellFormed = allBiomarkers
+      .filter((b: any) => b && typeof b.value === 'number' && b.unit && b.raw_name)
+
+    const resolved = demoteIntraReportCollisions(
+      wellFormed.map((b: any) => resolveBiomarker(resolver, b))
     )
 
-    // Build alias → canonical_name lookup (case-insensitive)
-    const aliasMap = new Map<string, string>()
-    for (const row of (canonicalRows ?? [])) {
-      const cn = row.canonical_name
-      aliasMap.set(cn.toLowerCase(), cn)
-      for (const alias of (row.aliases ?? [])) {
-        aliasMap.set(alias.toLowerCase(), cn)
-      }
-    }
-
-    // Resolve each biomarker: try exact match, then alias lookup
-    function resolveCanonical(name: string): string | null {
-      if (validNames.has(name)) return name
-      return aliasMap.get(name.toLowerCase()) ?? null
-    }
-
-    // 14. Map and filter biomarkers
-    const allBiomarkers = extracted.biomarkers ?? []
-    const biomarkers = allBiomarkers
-      .filter((b: any) => b && typeof b.value === 'number' && b.unit && b.raw_name)
-      .map((b: any) => ({
-        ...b,
-        canonical_name: resolveCanonical(b.canonical_name) ?? resolveCanonical(b.raw_name)
+    const biomarkers = resolved
+      .filter((r) => r.resolution.status === 'resolved')
+      .map((r) => ({
+        ...r.input,
+        canonical_name: (r.resolution as { canonicalName: string }).canonicalName,
       }))
-      .filter((b: any) => b.canonical_name !== null)
+
+    // Until unresolved rows persist as pending_review, they are dropped —
+    // so log the loss rather than letting it vanish silently.
+    const dropped = resolved.filter((r) => r.resolution.status !== 'resolved')
+    if (dropped.length > 0) {
+      console.warn(
+        `[extract-report] report ${report_id}: dropped ${dropped.length}/${wellFormed.length} biomarker(s): ` +
+        dropped
+          .map((r) => `${r.input.raw_name} (${r.resolution.status})`)
+          .join(', ')
+      )
+    }
 
     if (biomarkers.length > 0) {
       const biomarkerRows = biomarkers.map((b: any) => ({
