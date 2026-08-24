@@ -69,7 +69,8 @@ supabase functions deploy extract-report
 | RPC error never checked — a summaries-refresh failure would be silent | `index.ts:313` |
 | `consecutive_abnormal` can only ever be 0 or 1 — the `WHERE rn = 1` filter means its window frame (`UNBOUNDED PRECEDING AND CURRENT ROW`) contains exactly one row. It is a "latest reading is abnormal" boolean, not a streak count. Nothing reads it yet; the Week 5 digest/flag work would. | `refresh_biomarker_summaries` in `supabase/remote_schema.sql` |
 | `tsc --noEmit` emits **516 errors, 515 of them config noise** (no `@types/jest`; `supabase/functions` inside the TS project). Unusable as a CI gate. | `tsconfig.json` is 4 lines with no `exclude`. One real error: `SkeletonPulse.tsx:43` |
-| No global error boundary; no account-deletion flow (Apple + DPDP requirement) | root layout / settings |
+| ~~No global error boundary~~ (done 24 Aug); no account-deletion flow (Apple + DPDP requirement) | `src/components/common/ErrorBoundary.tsx` / settings |
+| **Trend chart draws MALE reference bands for every member.** `reference_min_male`/`reference_max_male` read unconditionally, so a woman's haemoglobin trend is drawn against 13.5–17.5 instead of 12.0–16.0 — she reads low when she is normal. Affects most sex-dimorphic markers. Chart band only; per-row status flags come from the lab's printed range and are unaffected. | `app/(app)/trend/[canonicalName].tsx:53-54`. Week 2 — needs the active-member context that member-scoping introduces. |
 | `expo-notifications` installed but absent from `app.json` plugins; no `bundleIdentifier`/`package`/EAS id set | reminders = week 3; identity blocked on the name decision |
 | Local `ScalePress` duplicate in `app/(app)/index.tsx`; `@react-navigation/drawer` unused; dead `index.ts` + `App.tsx` Expo scaffold | cleanup |
 
@@ -121,6 +122,44 @@ Company work (statutory compliance, banking, Apple/Play/Meta/D-U-N-S accounts) m
 ---
 
 ## 5. Immediate next steps for a fresh session
+
+> ### ⚠️ READ FIRST — state as of end of 24 Aug 2026
+>
+> **All of today's work is on branch `week1-error-boundary-and-cleanup`, NOT merged to `main`.** Seven commits. Fast-forward with `git checkout main && git merge week1-error-boundary-and-cleanup` once reviewed.
+>
+> **Two things are pending action and one is blocked:**
+>
+> 1. **`supabase/migrations/20260824_fix_alias_conflations.sql` is written but NOT APPLIED.** Apply with `supabase db push` — migration history is in sync, so only this file is pending, and push does not need Docker.
+> 2. **The alias data repair is blocked on one query.** The migration's closing comment holds it. Run this; the answer decides the repair *and* whether the resolver's canonical-before-raw order is itself a defect:
+>    ```sql
+>    select raw_name, value, unit, canonical_name, report_id, report_date
+>      from biomarkers
+>     where canonical_name in ('Blood Urea Nitrogen','Red Cell Distribution Width')
+>     order by canonical_name, report_date;
+>    ```
+>    `raw_name` = `Urea` → the edge function trusting the model's `canonical_name` over the printed `raw_name` is the mechanism. `raw_name` = `S. Urea` → the alias collision alone explains it. **Do not flip the resolution order on theory** — raw lab names are chaotic and raw-first could lower the overall resolution rate. That call belongs to the extraction eval.
+> 3. **Blast radius, same session:**
+>    ```sql
+>    select report_id, canonical_name, count(*), array_agg(raw_name), array_agg(value), array_agg(unit)
+>      from biomarkers group by 1,2 having count(*) > 1;
+>    ```
+>
+> **Housekeeping:** the Supabase DB password was exposed in a screenshot on 24 Aug — rotate it (Settings → Database → Reset; nothing in the app uses it). Colima is stopped.
+
+**Done 24 Aug** (full detail in the [codebase teardown](https://claude.ai/code/artifact/003bbdda-71b2-4328-8ef5-e32440dc13ee) and the Notion board):
+
+- **Global error boundary** at the root layout, outside `AuthGate`, with a "Back to home" escape hatch so a deterministic error can't trap the user. First real component test in the repo (mutation-checked).
+- **Real schema captured** → `supabase/remote_schema.sql`. This is now the source of truth. `databaseSchema.sql` and `DATABASE.md` are design history.
+- **Alias conflation fixed** in code + migration — three defect classes across the 335 canonical rows. Resolver extracted to `supabase/functions/_shared/canonicalResolver.ts`, importable by both Deno and Jest.
+- **Graphify removed** from this project (still registered globally).
+- Suite 151 → **175** passing; coverage 1.78% → ~4%.
+
+**Two claims in §3 were disproved today and are already corrected there:** canonical biomarkers are at 335 (not 23), `onboarding_data` was already applied, and a predicted `ON CONFLICT` defect in `refresh_biomarker_summaries` was **refuted** by direct execution — the live function dedups via `ROW_NUMBER() … WHERE rn = 1`.
+
+**Next in order:** `pending_review` (26 Aug — exact DDL is on the Notion row; write it against `remote_schema.sql`, not `databaseSchema.sql`) → family CRUD + consent (28 Aug) → member picker (29 Aug) → EAS + rename (30 Aug, blocked on the name decision).
+
+**Still open founder decisions:** app name + product domain (one decision, **hard deadline 26 Aug**) · seed list of 50 families.
+
 
 1. **Two boards now — company and product are separate.** Company-level work (statutory compliance, banking, Apple/Play/Meta/D-U-N-S accounts) moved OFF this project's board on 23 Aug into the **Ironstack Ventures** hub: https://app.notion.com/p/3c4afe337c73814aaa1ee391a9cca723 — holding *Compliance Calendar* and *Accounts & Vendors*, both relating back to the Projects database so you can see what blocks what. Context and reasoning live in `~/Code/ironstack` (COMPANY.md, COMPLIANCE.md, ACCOUNTS.md, research/, decisions/) — **that directory is deliberately not under version control and stays on this machine: do not `git init` it, add a remote, or offer to.** No version history there, so append and date rather than rewriting files wholesale. **The allocation rule: would you duplicate it if you started a fourth idea tomorrow? No → company layer.**
    **This project's board** is now build-only: **"HealthApp Launch"** (49 rows) at https://app.notion.com/p/0ea17bc2de5b4fd287e45a9254f9071d — views *Board by week*, *Calendar*, *Never cut*, *Think week (3–7 Sep)*, *Gated work*. Properties: Task, Week (Day 0 / Week 1–2 / Think week / Week 3–5 / October / Launch), Type, Status, Never-cut, Gate, Due, Notes. Update both as work lands — do not create a third.
