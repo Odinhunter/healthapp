@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { useAuth } from '../src/hooks/useAuth';
+import ErrorBoundary from '../src/components/common/ErrorBoundary';
 import { colors } from '../src/constants/theme';
 
 function AuthGate() {
@@ -57,4 +58,21 @@ const styles = StyleSheet.create({
   },
 });
 
-export default AuthGate;
+/**
+ * Root layout. The boundary sits OUTSIDE AuthGate deliberately — AuthGate
+ * itself renders (session restore, redirect effects), so a throw in there
+ * needs catching too. Everything below this point is covered.
+ */
+export default function RootLayout() {
+  const router = useRouter();
+
+  return (
+    <ErrorBoundary
+      // (app)/_layout redirects to welcome if there's no session, so this is
+      // safe to call regardless of auth state.
+      onGoHome={() => router.replace('/(app)')}
+    >
+      <AuthGate />
+    </ErrorBoundary>
+  );
+}
