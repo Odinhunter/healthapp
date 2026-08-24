@@ -1,996 +1,129 @@
-# HealthApp — Project Handoff Document
+# HealthApp — Handoff
 
-> **Purpose:** This document is the complete handoff for a new Claude conversation. Read it fully before touching any code. It covers product vision, every technical decision made, the exact state of every file, and what to build next.
+> Single source of truth for a new session. Last updated **24 Aug 2026** — §3 rewritten after a full codebase teardown + live-DB diagnostics. Strategy and timeline are unchanged from the 23 Aug review (Android ~30 Oct / iOS ~5 Nov).
+> Read order: this file → the [codebase teardown](https://claude.ai/code/artifact/003bbdda-71b2-4328-8ef5-e32440dc13ee) → the Notion boards (below). **`DATABASE.md` and `databaseSchema.sql` are design history, not schema — see §3.**
+> **Notion is the working surface from 23 Aug 2026.** The strategy artifact (https://claude.ai/code/artifact/a3de5fbf-fa4b-4bf1-b067-28a5758141ba) is **frozen and historical** — it still describes the original 30-day plan. Read it for the strategy rationale (positioning, pricing, courses engine, competitive analysis); do NOT trust its dates, sequencing or scope.
+> Session memory also persists at `~/.claude/projects/-Users-ishan-Code-healthapp/memory/` (auto-recalled).
 
 ---
 
-## SECTION 1 — PRODUCT VISION
+## 1. Product
 
-### What this app is
+Family health-records app for India. Positioning: **"a doctor friend who never forgets anything about your family and would never tell anyone."** Core loop: upload/photograph lab report → AI extracts biomarkers → canonical normalization → trends over time. Plus doctor-visit log, medication tracking, family profiles.
 
-A health records management app for the Indian market. The positioning: **"a doctor friend who never forgets anything about your family and would never tell anyone."**
-
-The founding insight: Indians have no reliable way to store, track, and understand their health records over time. Reports are scattered across WhatsApp, folders, and labs. Nobody tracks trends. Doctors see patients for 4 minutes and have no historical context. This app fixes that.
-
-### Five core features at launch
-
-1. **Blood report upload and AI extraction** — photograph or upload a PDF, AI reads it, stores every number
-2. **Biomarker timeline** — plot any single biomarker across multiple reports over time
-3. **Doctor visit log** — record consultations, diagnoses, follow-up dates
-4. **Medication tracking** — active prescriptions, reminder times, adherence log
-5. **Family profiles** — manage records for multiple family members under one account
-
-### Working app name
-
-`HealthApp` — placeholder only. The wordmark appears in `app/(auth)/welcome.tsx`. Replace globally when final name is decided.
-
-### Stack
-
-- **Framework:** React Native 0.83.4 + Expo SDK 55
-- **Routing:** Expo Router v3 (file-based, `app/` directory)
-- **Backend:** Supabase (Mumbai region `ap-south-1`)
-- **Language:** TypeScript strict throughout
-- **Animations:** React Native Reanimated 4.2.1
-- **List rendering:** `@shopify/flash-list` 2.0.2
-- **SVG:** `react-native-svg` 15.15.3
-- **Date formatting:** `date-fns` v4
-- **Testing:** Jest + `jest-expo` + `@testing-library/react-native`
-
-### Key product decisions — locked
+### Strategy decisions (settled Aug 2026 — full rationale + sources in the artifact)
 
 | Decision | Detail |
 |---|---|
-| Market | India first, urban families 28–45 |
-| Free tier | Unlimited uploads, basic view, one profile |
-| Paid tier | AI interpretation, trends, family profiles |
-| Upload policy | No upload limits ever — data in is always free |
-| Auth | Phone OTP in production; email OTP active in development. Twilio + DLT registration pending |
-| Data residency | Supabase Mumbai region. All health data stays in India |
-| Analytics | No third-party analytics touching health data |
-| Soft deletes | `deleted_at timestamptz` on all major tables |
-| Session storage | Supabase JWT chunked into 2048-byte pieces in `expo-secure-store` (JWT exceeds the 2048-byte limit per key) |
+| Wedge | **Family caregiving layer** ("manage your parents' health from another city"), not a storage vault. Extraction+trends is free at 4 funded competitors (Eka, Ultrahuman Vision Cloud, August AI, Samsung Health). |
+| Free tier | Storage/extraction/raw trends/basic reminders for **all** family members, forever. Never gate capture. |
+| Paid tier | One **Plus** plan ₹1,499–1,999/yr, family-inclusive, annual prepaid (UPI AutoPay). Gates *interpretation + alerting*: course verdicts, caregiver alerts, digests, visit-prep packs, monthly family assessment. No paywall in month 1 — waitlist fake-door only. |
+| Privacy | Trust floor + churn shield, not the invoice. Must be provable: access log, deletion UX, published handling policy. Launch copy: zero-retention extraction + honest disclosure ("processed in memory, never stored, never trained on"). Evaluate in-region inference (Bedrock ap-south-1 — verify model availability) post-launch. |
+| Habit | Daily = med reminders (all members' meds fire on organizer's phone — no delegated access needed). Weekly = family digest. Episodic = the report moment. Quarterly = visit-prep pack. Never build habit on "viewing records." |
+| Courses engine | n-of-1 "did it work" verdicts: intervention → adherence → retest → before/after with expected-effect band. v1 markers: 25-OH-D (hero: 60k IU sachet course), ferritin+Hb, HbA1c, lipids. **B12 excluded** (serum rises regardless of efficacy). Whoop-style statistics gate: no verdict until window elapsed + adherence threshold. Confounder guardrails: biotin×assays (48h washout), creatine×creatinine, vit-D seasonality, regression-to-mean bands. Copy: observational wellness framing only, no dose advice (CDSCO SaMD line + telemedicine rules). |
+| Diet | As courses (psyllium→LDL −13 mg/dL; oat β-glucan −10; low-GI→HbA1c −0.31pp; DASH→SBP −11.4 @8wk), course-level yes/no adherence. **No calorie tracking ever** (fails differentiation test; category shrinking). |
+| Next expansion | Caregiver-visible **home vitals** (BP/glucose/weight) — lane confirmed open (BeatO/Sugar.fit/Fitterfly are single-patient, none markets the caregiver job). Closest feature to SaMD line: trends + doctor-share, user-set thresholds, no diagnostic claims. Month 2+. |
+| Super app | Never the strategy. Expansion filter: *"does it produce or explain a family health record?"* Fails: calorie coaching, consult marketplaces, delivery, community, cohort benchmarking. |
+| Ingestion | WhatsApp forward-a-PDF becomes primary channel (month 2 — Meta verification paperwork starts month 1). Frame as document-intake bot, never "AI assistant on WhatsApp" (Meta ban, Jan 2026). ABDM/ABHA = secondary rail + trust hook. |
+| Conflict-free rule | Retest nudges recommend the test, accept results from any lab, take **no hidden commission**. Never bundle OPD benefits (IRDAI/Kenko), never pharma data sales. |
+| DPDP | Full obligations by 13 May 2027. Per-adult consent when adding family members; 72h breach runbook; grievance contact; India hosting throughout. |
 
 ---
 
-## SECTION 2 — DATABASE SCHEMA
+## 2. Stack & running
 
-### Two-layer architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  REFERENCE DATA        canonical_biomarkers                 │
-│  (admin-managed, read-only)                                 │
-├─────────────────────────────────────────────────────────────┤
-│  RAW LAYER             profiles                             │
-│  (ground truth,        family_members                       │
-│   append-only,         reports                              │
-│   never modified)      biomarkers                           │
-│                        doctor_visits                        │
-│                        medications                          │
-│                        medication_adherence_log             │
-├─────────────────────────────────────────────────────────────┤
-│  COMPUTED LAYER        biomarker_summaries                  │
-│  (pre-processed,                                            │
-│   what mobile reads)                                        │
-├─────────────────────────────────────────────────────────────┤
-│  PHASE 2 (structured   health_scores                        │
-│  but unpopulated)      wearable_daily_summaries             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Why this separation exists:** A user with 5 family members over 3 years of quarterly tests could have 1,800+ individual data points. If the dashboard queried all of that every time, it would be slow and expensive (Supabase charges per row read). The computed layer stores one pre-calculated row per biomarker per person, updated automatically after each report. Dashboard loads ~20 rows instead of thousands.
-
-### Table reference
-
-#### `canonical_biomarkers`
-Reference dictionary of every biomarker the system understands. Admin-managed, read-only for all users.
-
-| Key columns | Notes |
-|---|---|
-| `canonical_name` | Official name, unique — e.g. `Haemoglobin` |
-| `category` | `CBC`, `Lipid`, `Thyroid`, `Diabetes`, `Kidney`, `Liver`, `Vitamins`, `Iron` |
-| `unit_standard` | Standard unit, e.g. `g/dL` |
-| `aliases` | `text[]` of alternate names from Indian labs — e.g. `['Hb', 'HGB', 'Hemoglobin']` |
-| `reference_min/max_male/female/child` | Normal range by demographic |
-| `critical_low/high` | Values that trigger a critical alert |
-| `description` | Plain English explanation |
-| `low_meaning` / `high_meaning` | What out-of-range means in plain English |
-| `is_active` | Soft-disable a biomarker without deleting it |
-
-**RLS:** None. Accessible to all authenticated users. No insert/update from app.
-
-**Pre-seeded:** 23 biomarkers covering the most common Indian lab panels — Haemoglobin, WBC, Platelets, HbA1c, Fasting Glucose, Total/LDL/HDL Cholesterol, Triglycerides, TSH, T3, T4, Creatinine, eGFR, Urea, SGPT, SGOT, Bilirubin Total, Vitamin D, Vitamin B12, Ferritin, Iron, Uric Acid.
-
-#### `profiles`
-One row per authenticated user account.
-
-| Key columns | Notes |
-|---|---|
-| `id` | UUID — same as `auth.users.id` |
-| `full_name` | Required |
-| `phone` / `email` | Unique |
-| `subscription_tier` | `free` or `pro` |
-| `onboarding_complete` | Whether the user finished setup |
-| `onboarding_data` | JSONB — answers from onboarding flow. **PENDING MIGRATION** — column does not exist in schema yet (see Known Issues) |
-
-**RLS:** `auth.uid() = id` — users read/update/insert only their own row.
-
-**Auto-created on signup:** The `on_auth_user_created` trigger (on `auth.users`) automatically inserts a profiles row using the user's email and `full_name` from `raw_user_meta_data`. The app never creates profiles manually.
-
-#### `family_members`
-Every person managed under one account, including the account holder (`is_primary = true`, `relationship = 'self'`). This is the **central entity** — almost every other table links back to it.
-
-| Key columns | Notes |
-|---|---|
-| `owner_id` | FK → `profiles.id` |
-| `full_name` | Required |
-| `date_of_birth` | Used for age-appropriate reference ranges |
-| `gender` | `male`, `female`, `other` |
-| `relationship` | `self`, `parent`, `spouse`, `child`, `sibling`, `grandparent`, `other` |
-| `blood_group` | `A+`, `A-`, `B+`, `B-`, `AB+`, `AB-`, `O+`, `O-` |
-| `is_primary` | `true` for the account holder |
-| `avatar_color` | UI colour for their avatar tile |
-| `known_conditions` | `text[]` — e.g. `['Type 2 Diabetes', 'Hypertension']` |
-| `deleted_at` | Soft delete |
-
-**RLS:** `auth.uid() = owner_id` — full CRUD on own family members.
-
-**Indexes:** `(owner_id) WHERE deleted_at IS NULL`
-
-#### `reports`
-One row per uploaded blood test report. Tracks the async AI extraction pipeline.
-
-| Key columns | Notes |
-|---|---|
-| `owner_id` | FK → `profiles.id` |
-| `family_member_id` | FK → `family_members.id` |
-| `lab_name` | e.g. `Thyrocare`, `Dr Lal PathLabs` |
-| `report_date` | Date on the report, not upload date |
-| `file_path` | Path in Supabase Storage bucket `reports` |
-| `file_type` | `pdf` or `image` |
-| `extraction_status` | `pending` → `processing` → `complete` / `failed` |
-| `extraction_error` | Error message if AI extraction failed |
-| `extraction_model` | Which AI model processed this report |
-| `biomarker_count` | How many values were extracted |
-| `deleted_at` | Soft delete |
-
-**RLS:** `auth.uid() = owner_id`
-
-**Indexes:**
-- `(family_member_id, report_date DESC) WHERE deleted_at IS NULL`
-- `(extraction_status) WHERE status IN ('pending', 'processing')`
-
-**Realtime:** `replica identity full` is set. Table is added to `supabase_realtime` publication. The app subscribes to `UPDATE` events on a specific report to track extraction progress.
-
-#### `biomarkers`
-Raw layer. Every individual value extracted from every report. **Append-only — never modified.**
-
-| Key columns | Notes |
-|---|---|
-| `report_id` | FK → `reports.id` |
-| `family_member_id` | FK → `family_members.id` |
-| `canonical_name` | FK → `canonical_biomarkers.canonical_name` (enforced by DB constraint) |
-| `raw_name` | Exactly what the lab printed — preserved for audit |
-| `value` | `numeric` |
-| `unit` | Unit as reported by the lab |
-| `reference_min/max` | The lab's own reference range |
-| `status` | `normal`, `low`, `high`, `critical_low`, `critical_high` |
-| `report_date` | Denormalised from report — enables fast range queries without a join |
-
-**RLS:** `auth.uid() = owner_id`
-
-**Indexes:**
-- `(family_member_id, canonical_name, report_date DESC)` — primary trend query index
-- `(report_id)` — fetch all values from a single report
-- `(family_member_id, status) WHERE status != 'normal'` — fetch all abnormal values
-
-#### `biomarker_summaries`
-Computed layer. One row per biomarker per family member — always the latest known state. **Never written by the app directly — managed by the `refresh_biomarker_summaries` PostgreSQL function.**
-
-| Key columns | Notes |
-|---|---|
-| `family_member_id` | FK → `family_members.id` |
-| `canonical_name` | FK → `canonical_biomarkers.canonical_name` |
-| `latest_value` / `latest_unit` / `latest_status` | Most recent result |
-| `latest_report_date` | Date of most recent test |
-| `previous_value` / `previous_report_date` | Second-most-recent result |
-| `trend` | `improving`, `worsening`, `stable`, `new` |
-| `trend_percentage` | % change between latest and previous |
-| `consecutive_abnormal` | How many consecutive tests out of range |
-
-**Constraint:** `UNIQUE(family_member_id, canonical_name)` — exactly one row per biomarker per person.
-
-**RLS:** `auth.uid() = owner_id`
-
-**Indexes:** `(family_member_id)` — loads all summaries for one person in one query.
-
-#### `doctor_visits`
-Log of medical consultations per family member.
-
-| Key columns | Notes |
-|---|---|
-| `family_member_id` | FK → `family_members.id` |
-| `doctor_name` | Required |
-| `specialty` | e.g. `Cardiologist` |
-| `visit_date` | Required |
-| `diagnosis` | `text[]` |
-| `followup_date` | When next visit is scheduled |
-| `deleted_at` | Soft delete |
-
-**RLS:** `auth.uid() = owner_id`
-
-**Indexes:** `(family_member_id, visit_date DESC) WHERE deleted_at IS NULL`
-
-#### `medications`
-Active and historical prescriptions per family member.
-
-| Key columns | Notes |
-|---|---|
-| `family_member_id` | FK → `family_members.id` |
-| `visit_id` | Optional FK → `doctor_visits.id` |
-| `name` / `generic_name` | Brand and generic names |
-| `dosage` / `dosage_unit` / `frequency` | e.g. `500mg`, `twice daily` |
-| `times_per_day` | Numeric, for reminder scheduling |
-| `reminder_times` | `time[]` — e.g. `[08:00, 20:00]` |
-| `with_food` | boolean |
-| `start_date` / `end_date` | `end_date` null for ongoing |
-| `is_active` | Whether currently being taken |
-| `deleted_at` | Soft delete |
-
-**RLS:** `auth.uid() = owner_id`
-
-**Indexes:** `(family_member_id, is_active) WHERE deleted_at IS NULL AND is_active = true`
-
-#### `medication_adherence_log`
-Append-only raw log of every medication reminder event. Never updated — only new rows inserted.
-
-| Key columns | Notes |
-|---|---|
-| `medication_id` | FK → `medications.id` |
-| `scheduled_time` | When the reminder was due |
-| `actioned_time` | When user responded (null if missed) |
-| `outcome` | `taken`, `skipped`, `missed`, `snoozed` |
-| `snooze_count` | How many times user snoozed this dose |
-
-**RLS:** `auth.uid() = owner_id`
-
-**Indexes:**
-- `(medication_id, scheduled_time DESC)`
-- `(family_member_id, scheduled_time DESC)`
-
-#### `health_scores` — Phase 2, unpopulated
-Will store one composite health score per family member per week: biomarker score, medication adherence score, visit regularity score, and weighted overall score (0–100). `version` column built in from day one so algorithm improvements can be tracked.
-
-**RLS:** `auth.uid() = owner_id`
-
-#### `wearable_daily_summaries` — Phase 2, unpopulated
-Daily aggregated health data from wearable devices. Daily aggregates only (not raw readings). Planned sources: Apple Health, Google Fit, Ultrahuman, Noise. `UNIQUE(family_member_id, summary_date, source)` prevents duplicate imports.
-
-**RLS:** `auth.uid() = owner_id`
-
-### The `refresh_biomarker_summaries` function
-
-Called after every successful report extraction. Takes a `family_member_id` and recalculates the `biomarker_summaries` table for that person.
-
-**How it works:**
-1. Uses SQL window functions with `PARTITION BY canonical_name ORDER BY report_date DESC` to process all history in a single pass.
-2. `first_value()` gets the most recent value per biomarker.
-3. `nth_value(value, 2)` gets the second-most-recent (previous) value.
-4. `trend` is calculated by comparing `status` of latest vs. previous (normal vs. abnormal).
-5. `trend_percentage` is the % change between the two most recent values.
-6. `consecutive_abnormal` counts how many consecutive tests have been out of range.
-7. Uses `INSERT ... ON CONFLICT DO UPDATE` (upsert) — safe to call repeatedly.
-
-**Called via:** `supabase.rpc('refresh_biomarker_summaries', { p_family_member_id: ... })` in the edge function after biomarkers are inserted.
-
-### The canonical naming system
-
-**The problem:** Indian labs print wildly different names for the same test. Thyrocare prints `HGB`, Dr Lal prints `HAEMOGLOBIN`, SRL prints `Hb`. Without normalisation, trend analysis across labs is impossible.
-
-**The solution:** `canonical_biomarkers.canonical_name` is the official name. `aliases` stores every known alternate spelling. The edge function resolves each extracted biomarker against this map (exact match first, then case-insensitive alias lookup) before inserting into `biomarkers`. The `raw_name` is also stored for audit purposes.
-
-**Enforcement:** `biomarkers.canonical_name` has a FK constraint to `canonical_biomarkers.canonical_name`. Unrecognised biomarkers are silently dropped (not inserted) — a known limitation.
-
-### Storage bucket
-
-**Bucket name:** `reports` (private — no public URLs)
-
-**Path structure:** `/{owner_id}/{family_member_id}/{report_id}/report.{jpg|pdf}`
-
-**Storage RLS policy:** `auth.uid()::text = (storage.foldername(name))[1]` — users can only read/write files inside their own folder.
-
-**File access:** Files are only accessible via authenticated signed URLs, never direct URLs.
-
----
-
-## SECTION 3 — FULL FILE STRUCTURE
-
-```
-healthapp/
-├── app/                          Expo Router pages
-│   ├── _layout.tsx               Root layout + AuthGate (complete)
-│   ├── upload.tsx                Upload bottom sheet — transparentModal (complete)
-│   ├── (auth)/
-│   │   ├── _layout.tsx           Auth stack, slide_from_right animation (complete)
-│   │   ├── welcome.tsx           Welcome screen with IllustrationTrend (complete)
-│   │   ├── onboarding.tsx        5-step onboarding, answers saved to AsyncStorage (complete)
-│   │   ├── login.tsx             Email input → sends email OTP (complete)
-│   │   ├── verify.tsx            OTP entry → verify + flush answers + route (complete)
-│   │   └── create-profile.tsx    Create primary family_member (complete)
-│   └── (app)/
-│       ├── _layout.tsx           Tab navigator (Home, Records, Visits, Medications) (complete)
-│       ├── index.tsx             Home screen — latest report + flagged biomarkers (complete)
-│       ├── records.tsx           Paginated report list (complete)
-│       ├── visits.tsx            PLACEHOLDER — just renders "Visits" text
-│       ├── medications.tsx       PLACEHOLDER — just renders "Medications" text
-│       └── report/
-│           └── [id].tsx          Report detail — biomarkers by category (complete)
-│
-├── src/
-│   ├── constants/
-│   │   └── theme.ts              Colors, typography, spacing, radius (complete)
-│   ├── types/
-│   │   └── database.ts           Full TypeScript types for all 11 DB tables (complete)
-│   ├── lib/
-│   │   ├── supabase.ts           Supabase client with chunked SecureStore adapter (complete)
-│   │   ├── auth.ts               OTP send/verify, sign out, current user (complete)
-│   │   ├── reports.ts            createReport, subscribeToReportStatus, getPrimaryFamilyMember (complete)
-│   │   ├── storage.ts            uploadReportFile to Supabase Storage (complete)
-│   │   └── biomarkerGrouping.ts  groupBiomarkers, statusVariant, statusLabel, formatRefRange (complete)
-│   ├── hooks/
-│   │   ├── useAuth.ts            Session restore + onAuthStateChange subscription (complete)
-│   │   ├── useHomeData.ts        Fetch primary member, latest report, status counts, flagged summaries (complete)
-│   │   ├── useReports.ts         Paginated report list with biomarker counts (complete)
-│   │   └── useReportDetail.ts    Report + enriched biomarkers + realtime + polling fallback (complete)
-│   └── components/
-│       ├── PrimaryButton.tsx     Full-width button with spring animation, loading state (complete)
-│       ├── ScalePress.tsx        Animated spring-scale pressable wrapper (complete)
-│       ├── home/
-│       │   ├── EmptyReportIllustration.tsx  Illustration for empty home state (complete)
-│       │   └── SkeletonPulse.tsx            Pulsing shimmer skeleton block (complete)
-│       ├── illustrations/
-│       │   ├── IllustrationTrend.tsx        Animated line chart SVG — used on welcome + onboarding step 3 (complete)
-│       │   ├── IllustrationPulse.tsx        Animated pulsing rings — onboarding step 2 (complete)
-│       │   ├── IllustrationScattered.tsx    Scattered rectangles — onboarding step 1 (complete)
-│       │   ├── IllustrationShield.tsx       Shield graphic — onboarding step 5 (complete)
-│       │   └── IllustrationOrbs.tsx         Floating orbs — onboarding step 4 (complete)
-│       ├── onboarding/
-│       │   ├── ProgressBar.tsx    Animated progress bar for 5-step onboarding (complete)
-│       │   └── OptionCard.tsx     Selectable card with radio indicator + spring animation (complete)
-│       ├── report/
-│       │   ├── BiomarkerRow.tsx   Expandable row — name, value, unit, status pill, description (complete)
-│       │   ├── CategoryHeader.tsx Category group header for FlashList (complete)
-│       │   ├── SummaryStrip.tsx   Total / Normal / Attention counts at top of report detail (complete)
-│       │   └── DetailSkeleton.tsx Skeleton for report detail loading state (complete)
-│       └── records/
-│           ├── ReportCard.tsx     Card for each report in the records list (complete)
-│           ├── RecordsEmpty.tsx   Empty state for records tab (complete)
-│           └── RecordsSkeleton.tsx Skeleton for records list loading (complete)
-│
-├── supabase/
-│   └── functions/
-│       └── extract-report/
-│           └── index.ts          Edge function — AI extraction pipeline (complete, deployed)
-│
-├── __tests__/
-│   ├── unit/
-│   │   ├── auth-gate.test.ts           AuthGate routing logic
-│   │   ├── auth-lib.test.ts            Auth library functions
-│   │   ├── otp-validation.test.ts      OTP string cleaning + completion check
-│   │   ├── phone-validation.test.ts    Phone number cleaning + completion
-│   │   ├── verify-post-auth-flow.test.ts  Post-OTP routing decision logic
-│   │   ├── profile-creation.test.ts    Profile insert shape validation
-│   │   ├── onboarding-answers.test.ts  Onboarding payload shape
-│   │   ├── onboarding-step-machine.test.ts  Step navigation and answer saving
-│   │   └── theme.test.ts               Theme constants sanity checks
-│   └── integration/
-│       └── verify-flow.test.ts         End-to-end verify → route flow
-│
-├── __mocks__/
-│   ├── supabase-js.js            Mock Supabase client for tests
-│   ├── async-storage.js          Mock AsyncStorage
-│   ├── expo-secure-store.js      Mock SecureStore
-│   ├── expo-router.js            Mock expo-router
-│   ├── react-native-svg.js       Mock SVG components
-│   ├── datetimepicker.js         Mock DateTimePicker
-│   └── url-polyfill.js           Mock URL polyfill
-│
-├── assets/
-│   ├── icon.png                  App icon
-│   ├── splash-icon.png           Splash screen
-│   ├── favicon.png               Web favicon
-│   ├── android-icon-foreground.png
-│   ├── android-icon-background.png
-│   └── android-icon-monochrome.png
-│
-├── databaseSchema.sql            Full SQL schema — source of truth for all tables/functions/RLS
-├── DATABASE.md                   Plain-language database documentation for non-technical reference
-├── CLAUDE.md                     Project instructions for Claude
-├── HANDOFF.md                    This file
-├── app.json                      Expo config
-├── package.json                  Dependencies
-├── babel.config.js               babel-preset-expo + react-native-worklets/plugin
-├── tsconfig.json                 TypeScript config (strict)
-└── .env                          Environment variables (not committed)
-```
-
----
-
-## SECTION 4 — SCREENS AND THEIR STATE
-
-### `app/_layout.tsx` — Root Layout + AuthGate
-**State:** Complete
-
-The root layout wraps everything in an `AuthGate` component that:
-- Listens to auth state via `useAuth`
-- Redirects unauthenticated users to `/(auth)/welcome`
-- Redirects authenticated users away from auth screens to `/(app)` — **with one exception:** `segments[1] === 'create-profile'` is exempted so the post-OTP profile setup flow isn't interrupted
-- Renders a full-screen loading spinner while session is restoring
-- Registers `upload` as a `transparentModal` screen so iOS doesn't apply sheet presentation controller insets
-
----
-
-### `app/(auth)/welcome.tsx`
-**State:** Complete
-
-Entry point for new and returning users.
-- Top 45%: `IllustrationTrend` animated SVG
-- Bottom 55%: wordmark `HealthApp` (TODO: replace), headline, subtext
-- Fade + slide-up entrance animation (Reanimated `withTiming` + `withSpring`)
-- "Get started" → `/(auth)/onboarding`
-- "I already have an account" → `/(auth)/login`
-
----
-
-### `app/(auth)/onboarding.tsx`
-**State:** Complete
-
-5-step single-screen onboarding (all steps in one component, slides between them).
-
-| Step | Type | Question | Answer options |
-|---|---|---|---|
-| 1 | Selection | Where do your health records live? | whatsapp / folder / lab_only / dont_track |
-| 2 | Selection | How often do you get blood tests? | few_months / once_year / when_needed / been_a_while |
-| 3 | Information | Most people lose 80% of health data | No selection — just CTA |
-| 4 | Selection | What matters most to you? | understanding_reports / tracking_family / medications / one_place |
-| 5 | Trust screen | Your data belongs to you | No selection — 3 trust bullet points |
-
-**Animation:** `slideX` shared value — steps slide in from right on forward, from left on back. Uses `Easing.out(Easing.cubic)` — note: Reanimated 4.x uses `Easing.sin` not `Easing.sine`.
-
-**On finish:** Serialises answers + `onboarding_completed_at` timestamp to `AsyncStorage` under key `onboarding_answers`. Navigates to `/(auth)/login`. Answers are flushed to `profiles.onboarding_data` in `verify.tsx` after successful OTP verification.
-
-**Data shape stored in AsyncStorage:**
-```json
-{
-  "records_location": "whatsapp | folder | lab_only | dont_track",
-  "test_frequency": "few_months | once_year | when_needed | been_a_while",
-  "top_priority": "understanding_reports | tracking_family | medications | one_place",
-  "onboarding_completed_at": "ISO timestamp"
-}
-```
-
----
-
-### `app/(auth)/login.tsx`
-**State:** Complete (email OTP dev mode)
-
-- Single email input field
-- Validates via `isValidEmail()` (must contain `@` and `.`)
-- Calls `sendEmailOTP(email)` from `src/lib/auth.ts`
-- On success: navigates to `/(auth)/verify` passing `email` as a route param
-- **Production TODO:** Switch to `signInWithOTP({ phone })` once Twilio + DLT registration is complete. The phone OTP code already exists in `auth.ts` as `signInWithOTP()`.
-
----
-
-### `app/(auth)/verify.tsx`
-**State:** Complete
-
-Custom OTP input UI — 6 individual digit boxes driven by a hidden `TextInput`.
-
-**Flow on successful verify:**
-1. Call `verifyEmailOTP(email, token)`
-2. Get current user via `supabase.auth.getUser()`
-3. Read `onboarding_answers` from `AsyncStorage`
-4. If found: `UPDATE profiles SET onboarding_data = ..., onboarding_complete = true` then `removeItem`
-5. Query `family_members` for `is_primary = true` on this user
-6. Route: primary member exists → `/(app)`, no primary member → `/(auth)/create-profile`
-
-**Error UX:** Wrong OTP triggers a shake animation via `withSequence` on a `shakeX` shared value. OTP input is cleared.
-
-**Resend:** 30-second countdown using `setTimeout` chain. Calls `sendEmailOTP(email)` again.
-
-**Known issue:** `onboarding_data` column does not yet exist in the live database (see Known Issues section). The update call will silently fail or error until the migration is run.
-
----
-
-### `app/(auth)/create-profile.tsx`
-**State:** Complete
-
-Creates the primary `family_members` row for the account holder.
-
-Fields:
-- Full name (required)
-- Date of birth (DateTimePicker — modal on iOS, inline on Android)
-- Gender (pill selector: Male / Female / Other)
-- Blood group (grid pill selector: A+ through O-)
-
-On submit:
-1. Inserts `family_members` row with `relationship: 'self'`, `is_primary: true`, `avatar_color: colors.primary`
-2. Updates `profiles.full_name` to match
-3. Replaces navigation to `/(app)`
-
----
-
-### `app/(app)/_layout.tsx`
-**State:** Complete
-
-Tab navigator with 4 tabs: **Home**, **Records**, **Visits**, **Medications**. The `report/[id]` route is registered with `href: null` to exclude it from the tab bar. Redirects to `/(auth)/welcome` if user logs out.
-
----
-
-### `app/(app)/index.tsx` — Home Screen
-**State:** Complete
-
-**Data:** `useHomeData(user?.id)` fetches:
-1. Primary family member name (split on space for first name)
-2. Latest report (by `report_date DESC`)
-3. Biomarker status counts from the latest report's `biomarkers` rows
-4. Flagged `biomarker_summaries` count (total, for "See all" threshold)
-5. Top 3 flagged biomarker summaries (for "Needs attention" section)
-
-**Empty state:** If no reports exist, shows `EmptyReportIllustration` with a CTA to upload.
-
-**Data state:** Shows:
-- Header with greeting (Good morning/afternoon/evening) + first name + avatar initial
-- "Latest report" card with lab name, date, stat pills (Normal / Flagged / Critical counts)
-- "Needs attention" section with up to 3 `FlaggedRow` cards
-- "See all →" if total flagged > 3 (button exists, **no destination yet**)
-- FAB (+) for upload
-
-**Known issue:** `FlaggedRow` has `onPress={() => {}}` — tapping a flagged biomarker does nothing. Should navigate to either the report detail or a biomarker trend view.
-
----
-
-### `app/upload.tsx` — Upload Sheet
-**State:** Complete
-
-Presented as a `transparentModal` from any screen. The sheet panel is 88% of screen height, positioned at the bottom of a transparent overlay. Slide-up animation is driven manually via Reanimated (iOS doesn't apply `UISheetPresentationController` scroll insets in this mode).
-
-**File sources:**
-- Photo library (`expo-image-picker`)
-- Camera (`expo-image-picker`)
-- PDF (`expo-document-picker`)
-
-**Form fields:** Lab name (optional text input), Report date (DateTimePicker, defaults to today).
-
-**Upload flow (`analyse()` function):**
-1. Generate `reportId = Crypto.randomUUID()`
-2. Fetch primary family member via `getPrimaryFamilyMember(userId)`
-3. Upload file to Storage: `uploadReportFile()` → `reports/{userId}/{memberId}/{reportId}/report.{ext}`
-4. Create report row: `createReport()` with `extraction_status: 'pending'`
-5. Invoke edge function: `supabase.functions.invoke('extract-report', { body: { report_id } })`
-6. On success: `router.replace(`/(app)/report/${reportId}`)` — user lands on the processing screen
-
-**File upload implementation:** Uses `expo-file-system`'s `File` class (not FormData or fetch) to read the file as an `ArrayBuffer` and upload directly to Supabase Storage.
-
-**Known limitation:** Always uses the primary family member. No UI to select which family member this report belongs to.
-
----
-
-### `app/(app)/report/[id].tsx` — Report Detail Screen
-**State:** Complete
-
-**Data:** `useReportDetail(id)` which:
-- Fetches the report row
-- If `complete`: fetches biomarkers with a join to `canonical_biomarkers` for category/description/meanings
-- If `pending` or `processing`: subscribes to Supabase Realtime for UPDATE events on this report + starts a 3-second polling interval as fallback
-- Cleans up subscription and polling on unmount
-
-**States handled:**
-- Loading → skeleton (`DetailSkeleton`)
-- Error (could not load) → error message + go back
-- `failed` → extraction error message + "Try uploading again"
-- `pending` / `processing` → spinner + "Analysing your report…"
-- `complete` + 0 biomarkers → "No biomarkers found" message
-- `complete` + biomarkers → full list
-
-**Biomarker list:** Rendered with `FlashList`. Items are flattened: each category group becomes a `CategoryHeader` item followed by individual `BiomarkerRow` items. Rows are expandable (tap toggles `expanded` Set state) to show description and meaning text from `canonical_biomarkers`.
-
-**Components used:** `BiomarkerRow`, `CategoryHeader`, `SummaryStrip`, `DetailSkeleton`
-
----
-
-### `app/(app)/records.tsx` — Records List
-**State:** Complete
-
-Paginated list of all reports for the user.
-
-**Data:** `useReports(user?.id)` — fetches 20 reports per page ordered by `report_date DESC`. For `complete` reports, batch-fetches biomarker statuses to compute `counts: { normal, flagged, critical }`.
-
-**States:** Loading skeleton, error, empty state (`RecordsEmpty`), populated list.
-
-**FAB:** Same upload button as home screen.
-
----
-
-### `app/(app)/visits.tsx`
-**State:** PLACEHOLDER
-
-```tsx
-export default function VisitsScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Visits</Text>
-    </View>
-  );
-}
-```
-
-No data fetching, no UI beyond a centred text label.
-
----
-
-### `app/(app)/medications.tsx`
-**State:** PLACEHOLDER
-
-```tsx
-export default function MedicationsScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Medications</Text>
-    </View>
-  );
-}
-```
-
-No data fetching, no UI beyond a centred text label.
-
----
-
-## SECTION 5 — BACKEND AND INFRASTRUCTURE
-
-### Supabase project
-
-- **Region:** `ap-south-1` (Mumbai) — chosen for Indian data residency
-- **Auth config:** Email OTP enabled. Phone/SMS auth disabled (pending Twilio integration)
-- **Realtime:** Enabled on the `reports` table (`replica identity full`, added to publication)
-- **Extensions:** `uuid-ossp`, `pg_cron` (pg_cron added but not yet actively used)
-
-### Edge Function: `extract-report`
-
-**Location:** `supabase/functions/extract-report/index.ts`
-
-**Trigger:** Called by the upload screen via `supabase.functions.invoke('extract-report', { body: { report_id } })` immediately after the report row is created.
-
-**Model:** `claude-sonnet-4-5` (not claude-sonnet-4-6)
-
-**Max tokens:** `16000` — large because comprehensive Indian blood panels have 50–100+ biomarkers
-
-**Pipeline step by step:**
-
-1. Validate `Authorization` header — extract JWT
-2. Create admin Supabase client using service role key
-3. Verify JWT: `supabaseAdmin.auth.getUser(token)` — authenticates the caller
-4. Parse request body — require `report_id`
-5. Fetch report row from DB — verify `owner_id = user.id` and `extraction_status = 'pending'`
-6. Update report to `extraction_status: 'processing'`
-7. Download file from Storage: `supabaseAdmin.storage.from('reports').download(report.file_path)`
-8. Convert file to base64 (manual byte-by-byte loop using `btoa`)
-9. Build Claude content blocks: PDF → `{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: ... } }`, image → `{ type: 'image', source: { type: 'base64', ... } }`
-10. Call Claude API at `https://api.anthropic.com/v1/messages` with the prompt — expects pure JSON response
-11. Strip any markdown code fences if present (Claude sometimes wraps output despite instructions)
-12. Parse JSON response — handles non-medical file detection gracefully
-13. Fetch `canonical_biomarkers` table — build alias map (case-insensitive)
-14. Resolve each extracted biomarker's `canonical_name` via exact match then alias lookup
-15. Filter: only insert biomarkers with valid `value` (number), `unit`, `raw_name`, and a resolved `canonical_name`
-16. Bulk insert validated biomarkers into `biomarkers` table
-17. Update report: `extraction_status: 'complete'`, `lab_name`, `biomarker_count`, `extraction_model: 'claude-sonnet-4-5'`
-18. Call `refresh_biomarker_summaries(family_member_id)` via `supabaseAdmin.rpc()`
-19. Return `{ success: true, biomarker_count: N }`
-
-**Error handling:**
-- Each failure mode updates `reports.extraction_status = 'failed'` and `extraction_error` with a message before returning an error response
-- Non-medical files (detected from Claude's refusal text) return a user-friendly message: "This does not appear to be a blood test report."
-- Unresolved biomarker names are silently dropped (not inserted)
-
-**Confirmed working:** Extracts 50+ biomarkers from 18-page Indian lab PDF reports.
-
-**Secrets required in Supabase dashboard:**
-- `ANTHROPIC_API_KEY` — configured
-- `SUPABASE_URL` — auto-injected by Supabase
-- `SUPABASE_SERVICE_ROLE_KEY` — auto-injected by Supabase
-
-### Realtime subscriptions
-
-`useReportDetail` subscribes to `postgres_changes` on the `reports` table filtered by `id=eq.{reportId}`. The subscription is created via `subscribeToReportStatus()` in `src/lib/reports.ts`. A 3-second polling interval runs as a fallback in case the realtime event is missed. Both are cleaned up on component unmount.
-
-### Auth configuration
-
-**Current (development):** Email OTP. User enters email → receives 6-digit code → enters code in verify screen.
-
-**Production plan:** Switch to phone OTP via Twilio. Code in `auth.ts` has `signInWithOTP({ phone })` and `verifyOTP({ phone, token, type: 'sms' })` already written, marked with `// PHONE AUTH — reinstate for production with Twilio`. Requires Twilio account, DLT registration (India telecom requirement for transactional SMS), and configuration in Supabase Auth settings.
-
----
-
-## SECTION 6 — DESIGN SYSTEM
-
-**Philosophy:** Flat, no shadows. Borders only, never elevation. Warm off-white background. Primary colour is a deep teal-green. All components follow this language consistently.
-
-### Colors
-
-```typescript
-colors = {
-  primary:       '#0F6E56',  // Deep teal-green — buttons, links, active states, primary actions
-  primaryLight:  '#E1F5EE',  // Light teal — pill backgrounds, selected card bg, avatar bg
-  background:    '#FAFAF9',  // Warm off-white — screen background
-  surface:       '#FFFFFF',  // Pure white — cards, inputs, sheets
-  border:        '#E8E6E1',  // Warm grey — card borders, input borders, dividers
-
-  textPrimary:   '#1A1A1A',  // Near-black — headings, primary labels
-  textSecondary: '#6B6966',  // Medium grey — subtitles, dates, secondary labels
-  textTertiary:  '#9C9A92',  // Light grey — placeholders, metadata
-
-  success:       '#1D9E75',  // Green — (reserved, not yet used in UI)
-  warning:       '#BA7517',  // Amber — flagged biomarker text (high/low)
-  danger:        '#E24B4A',  // Red — critical states, error text
-  critical:      '#A32D2D',  // Dark red — critical biomarker text
-}
-```
-
-**Status colour conventions (used in BiomarkerRow and home screen):**
-- Normal: `primaryLight` background, `primary` text
-- Flagged (high/low): `#FFF3DB` background, `#854F0B` text
-- Critical: `#FCEBEB` background, `#A32D2D` text
-
-### Typography scale
-
-```typescript
-typography = {
-  xs:   11,  // Pills, metadata, timestamps
-  sm:   13,  // Secondary labels, ref ranges, dates
-  base: 15,  // Body text, button labels
-  md:   17,  // Input text, section subtitles
-  lg:   20,  // Section headers
-  xl:   24,  // Screen subtitles
-  xxl:  30,  // Screen titles, large names
-}
-```
-
-### Spacing scale
-
-```typescript
-spacing = {
-  xs:    4,
-  sm:    8,
-  md:    12,
-  lg:    16,
-  xl:    20,
-  xxl:   24,
-  xxxl:  32,
-  xxxxl: 40,
-  xxxxxl: 48,
-}
-```
-
-### Border radius scale
-
-```typescript
-radius = {
-  sm:   6,    // Small pills, tags
-  md:   10,   // Biomarker rows
-  lg:   14,   // Cards, inputs, buttons
-  xl:   20,   // Large cards, sheet corners
-  full: 999,  // Pills, avatars, circular buttons
-}
-```
-
-### Key component patterns
-
-**`PrimaryButton`** (`src/components/PrimaryButton.tsx`)
-- Full width, 58px height, `radius.lg`
-- Spring scale animation on press (scale 0.96)
-- Disabled state: `backgroundColor: '#B4B2A9'`
-- Loading state: `ActivityIndicator` replaces label
-- Props: `label`, `onPress`, `disabled?`, `loading?`
-
-**`ScalePress`** (`src/components/ScalePress.tsx`)
-- Wrapper for any pressable content with spring scale animation (scale 0.97)
-- Props: `onPress`, `style?`, `children`, `disabled?`
-- Used instead of plain `Pressable` throughout the app for all interactive cards
-
-**`OptionCard`** (`src/components/onboarding/OptionCard.tsx`)
-- 64px height card with radio button on right
-- Selected state: `primary` border (2px), `primaryLight` background
-- Spring animation on press, accessibility role `radio`
-
-**`ProgressBar`** (`src/components/onboarding/ProgressBar.tsx`)
-- 3px track at top of screen
-- Animated fill via `withTiming` (400ms, `Easing.out(Easing.cubic)`)
-
-**Input field pattern** (used inline in login, verify, create-profile, upload):
-- 58px height, 1.5px border (`colors.border`), `radius.lg`
-- Focused: 2px border, `colors.primary`
-- No shadow
-
-**Card pattern:**
-- `backgroundColor: colors.surface`, 1.5px border `colors.border`, `radius.lg`
-- No shadow ever
-
-### Animation conventions
-
-- **Entrance:** `withTiming(opacity 0→1)` + `withSpring(translateY 20→0)`
-- **Press feedback:** `withSpring(scale 0.96-0.97)` with `{ damping: 15, stiffness: 300 }`
-- **Shake (error):** `withSequence` on `translateX`: -10, +10, -8, +8, 0 at 60ms each
-- **Slide (onboarding):** `slideX` shared value set to ±SCREEN_WIDTH before step change, then `withTiming(0)` on re-render
-
----
-
-## SECTION 7 — WHAT'S BUILT AND WHAT'S NEXT
-
-### Fully working
-
-- Complete auth flow end-to-end: Welcome → Onboarding → Login → OTP Verify → Create Profile → Home
-- Onboarding 5 steps with answers persisted to AsyncStorage and flushed to DB on verify
-- Home screen: empty state, data state with latest report card, flagged biomarker list, skeleton loading, FAB
-- Upload sheet: camera, photo library, PDF, lab name + date form, upload + report creation + AI trigger
-- AI extraction pipeline via Edge Function: PDF and image → Claude → canonical biomarkers → DB → biomarker_summaries refresh
-- Report detail screen: FlashList with category headers, expandable biomarker rows, all pipeline states (pending/processing/complete/failed)
-- Records tab: paginated list with biomarker counts per report, empty state, skeleton
-- Realtime status updates on report detail screen (with polling fallback)
-- All TypeScript types covering 11 DB tables
-- 9 unit test files + 1 integration test file
-- Confirmed working: 50+ biomarkers extracted from 18-page Indian lab PDF
-
-### Partially working / needs attention
-
-- **`FlaggedRow` `onPress`** is `() => {}` — tapping a flagged biomarker on the home screen does nothing. Should navigate to a biomarker trend view or the originating report.
-- **"See all →" for flagged biomarkers** exists in home screen but has no destination.
-- **Lab name on home screen card** — depends on edge function setting `lab_name` on the report row. Works when extraction succeeds; shows "Blood Report" as fallback when null.
-- **Upload always uses primary family member** — no UI to choose which family member a report belongs to. This will be a problem as soon as users have more than one family member.
-
-### What to build next (recommended order)
-
-1. **Run the `onboarding_data` DB migration** (required before any new user completes onboarding)
-2. **Biomarker trend chart** — tap a flagged biomarker on home → chart of that biomarker over time using `biomarkers` table with `biomarkers_timeline_idx`. The data model is ready; no UI exists yet.
-3. **FlaggedRow navigation** — route to trend chart or report detail
-4. **Doctor visits screen** — list, add, view, edit visit records (all DB infrastructure ready)
-5. **Medications screen** — active medications, add/edit, adherence tracking
-6. **Family member management** — add family members, switch active member context, select member on upload
-7. **Medication reminders** — push notifications via `expo-notifications` (package already installed)
-8. **Profile/settings screen** — edit name, change email, subscription info, sign out
-
----
-
-## SECTION 8 — KNOWN ISSUES AND PENDING DECISIONS
-
-### Bugs
-
-**`onboarding_data` column missing from DB**
-The `verify.tsx` screen calls:
-```typescript
-await supabase.from('profiles').update({
-  onboarding_data: JSON.parse(raw),
-  onboarding_complete: true,
-}).eq('id', user.id);
-```
-But the `profiles` table in `databaseSchema.sql` does **not** have an `onboarding_data` column. The TypeScript types in `database.ts` include it, but the actual migration has not been run. Run this in the Supabase SQL editor:
-```sql
-ALTER TABLE profiles ADD COLUMN IF NOT EXISTS onboarding_data jsonb DEFAULT '{}';
-```
-
-**Biomarker status counts on home screen**
-The home screen queries `biomarkers` for the latest report and counts statuses. This works but does a second DB call after the report is fetched (not a single query). Consider whether biomarker counts should be pre-computed differently.
-
-**Unresolved canonical names silently dropped**
-In the edge function, biomarkers whose names cannot be resolved against `canonical_biomarkers` are silently filtered out. If a lab uses a name not in the aliases table, that biomarker is lost without any indication. This will surface as lower-than-expected `biomarker_count` on some reports.
-
-### Tech debt
-
-**`ScalePress` duplicated in home screen**
-`app/(app)/index.tsx` contains a local `ScalePress` implementation identical to `src/components/ScalePress.tsx`. It predates the extracted component. The local version should be removed and the import used instead.
-
-**`expo-notifications` installed but not wired**
-`expo-notifications` is in `package.json` and `expo-local-authentication` too. Neither is configured or used yet.
-
-**`@react-navigation/drawer` installed but not used**
-`@react-navigation/drawer` is in dependencies but not used. May have been added in anticipation of a future feature.
-
-**No error boundary**
-There is no global React error boundary. An unhandled error in a screen will crash the app without recovery UI.
-
-**No pull-to-refresh**
-`useReports` has a `refresh()` function but no pull-to-refresh is wired in `records.tsx`.
-
-**`biomarker_count` on reports row vs. actual**
-The `reports.biomarker_count` column is set by the edge function to `biomarkers.length` after resolving canonical names. This means the count reflects only successfully resolved biomarkers, not total extracted. A 50-biomarker report might show 45 if 5 names didn't resolve.
-
-### Pending decisions
-
-- **Final app name** — `HealthApp` is a placeholder used in `welcome.tsx` wordmark, `onboarding.tsx` step 3 copy, `app.json` `name` and `slug`. All three need updating.
-- **Phone OTP DLT registration** — Required for production in India. Without DLT (Distributed Ledger Technology) registration, SMS transactional messages are blocked by Indian telecom regulation. Twilio account + DLT entity/template registration needed before going live.
-- **Subscription paywall** — The `subscription_tier` and `subscription_expires_at` columns exist. No paywall logic or payment integration exists yet.
-- **Family member switching on upload** — Current assumption: always upload to primary member. Multi-member households need a member picker on the upload sheet.
-- **Canonical biomarker coverage gaps** — Only 23 biomarkers are seeded. Indian comprehensive panels have 80–100+ tests. Gaps mean biomarkers are silently dropped on extraction. The aliases system is the right approach but needs more coverage.
-- **`pg_cron` extension** — Installed but not used. Reserved for future scheduled jobs (e.g., weekly biomarker summary recalculations, scheduled health score computation).
-
----
-
-## SECTION 9 — HOW TO RUN THE PROJECT
-
-### Prerequisites
-
-- Node.js 18+
-- Expo CLI (`npm install -g expo-cli`)
-- Supabase CLI (`brew install supabase/tap/supabase`)
-- iOS Simulator (Xcode) or Android Emulator, or physical device with Expo Go
-
-### Environment variables
-
-Create `.env` in the project root (this file is not committed):
+React Native 0.83.4 + Expo SDK 55, Expo Router v3, Supabase (Mumbai `ap-south-1`), TypeScript strict, Reanimated 4, FlashList, Jest.
 
 ```bash
-EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
-```
-
-Both values are found in the Supabase dashboard under **Project Settings → API**.
-
-The edge function reads `ANTHROPIC_API_KEY`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` from Supabase secrets (not from `.env` — these are configured in the Supabase dashboard under **Edge Functions → Secrets**).
-
-### Start development
-
-```bash
-npm install
-npx expo start
-```
-
-Press `i` for iOS simulator, `a` for Android emulator, or scan the QR code with Expo Go on a physical device.
-
-### Run tests
-
-```bash
-npx jest
-npx jest --watch          # watch mode
-npx jest --coverage       # with coverage report
-```
-
-### Link Supabase project
-
-```bash
-supabase login
-supabase link --project-ref your-project-ref
-```
-
-### Apply database schema
-
-Run `databaseSchema.sql` in the Supabase SQL editor (Dashboard → SQL Editor). The schema is idempotent in most places (`CREATE OR REPLACE`, `CREATE IF NOT EXISTS`) but should be run once on a fresh project.
-
-**Required additional migration** (not in `databaseSchema.sql`):
-```sql
-ALTER TABLE profiles ADD COLUMN IF NOT EXISTS onboarding_data jsonb DEFAULT '{}';
-```
-
-### Deploy edge functions
-
-```bash
+npm install && npx expo start        # dev (i = iOS sim)
+npx jest                              # 151 tests pass in ~2s but cover 1.78% — NOT a safety net (see gaps)
 supabase functions deploy extract-report
 ```
 
-Set secrets in Supabase dashboard: **Edge Functions → Secrets → Add new secret**:
-- `ANTHROPIC_API_KEY` — your Anthropic API key
+`.env`: `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Edge-function secrets (Supabase dashboard): `ANTHROPIC_API_KEY` (+ auto-injected URL/service-role key).
 
-`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are auto-injected by Supabase into all edge functions and do not need to be set manually.
+**Design system** (`src/constants/theme.ts`): flat, borders only, never shadows; warm off-white `#FAFAF9`; primary deep teal `#0F6E56`; cards = white surface, 1.5px `#E8E6E1` border, radius 14; spring-scale press feedback (`ScalePress`). Match it exactly.
 
-### Build for production
+---
 
-```bash
-npx expo build:ios      # iOS (requires Apple Developer account)
-npx expo build:android  # Android
-```
+## 3. Code state (re-verified 24 Aug 2026 — full teardown: https://claude.ai/code/artifact/003bbdda-71b2-4328-8ef5-e32440dc13ee)
 
-Or use EAS Build:
-```bash
-npm install -g eas-cli
-eas build --platform ios
-eas build --platform android
-```
+> **`databaseSchema.sql` does not describe the deployed database.** Three live checks on 24 Aug contradicted it (canonical count, `onboarding_data`, `refresh_biomarker_summaries`), and both files in `supabase/migrations/` turned out applied-but-untracked. Nothing in this repo currently describes the live DB. **Run `supabase db pull` and commit it before writing any migration** — starting with `pending_review` on 26 Aug, which modifies a live CHECK constraint and a live FK. Treat `databaseSchema.sql` and `DATABASE.md` as design history, not schema.
+
+### Working end-to-end
+- Auth: welcome → 5-step onboarding → email OTP login/verify → create-profile → home. (Phone OTP code exists in `src/lib/auth.ts`, disabled pending Twilio+DLT.)
+- Upload sheet (`app/upload.tsx`): camera/library/PDF → Supabase Storage → report row → `extract-report` edge function → realtime status + polling fallback → report detail with categorized expandable biomarkers.
+- Records list (paginated), **visits (list/add/edit), medications (list/add/edit), biomarker trend chart (`app/(app)/trend/[canonicalName].tsx`)** — all real screens now.
+- Extraction confirmed on 50+ biomarkers from 18-page Indian lab PDFs.
+
+### Critical gaps (these ARE the week-1/2 work)
+| Issue | Where |
+|---|---|
+| **Alias map conflates distinct analytes — fabricated trends.** BUN 11.87 and Urea 25.4 (×2.14, the exact conversion) both resolve to `Blood Urea Nitrogen`; RDW-CV 14.5% and RDW-SD 36.2 fL both resolve to `Red Cell Distribution Width`. Same panel, different analytes, plotted as consecutive trend points. Corrupts the one thing the product sells. | `canonical_biomarkers.aliases[]` — split the conflated rows; add a guard against one `canonical_name` twice in one `report_id` |
+| **Scoping is split, not uniformly primary-hardwired.** Home + records filter on `owner_id` alone → they blend *all* members the day family CRUD ships. Trends/visits/meds filter on primary `family_member_id`. | `useHomeData.ts:52–99` and `useReports.ts:38` are the owner-scoped ones — **no `is_primary` appears in either**, so "grep `is_primary` to zero" will not catch them. `is_primary` reads: `useHomeData.ts:41`, `useBiomarkerTrend.ts:39`, `reports.ts:66`, `verify.tsx:97` (also missing its `deleted_at` filter). `create-profile.tsx:62` *writes* it and stays. |
+| Unresolved biomarkers **silently dropped**, and `biomarker_count` reports the post-drop number | `extract-report/index.ts:270` drops, `:307` miscounts — persist as `pending_review` instead |
+| **Test suite is not a safety net: 1.78% statement coverage.** 8 of 12 test files define the functions they test *inside the test file* (`authGateDecision`, `buildOnboardingPayload` exist nowhere in `src/`). 0% on every screen, hook and component. | `__tests__/` — 151 tests pass in 1.9s and cannot fail from an app change |
+| A report that dies mid-extraction can never be retried — stuck in `processing` forever, client polls indefinitely | `index.ts:71–79` guard + no reaper; `upload.tsx:258` fires the invoke with no `await` and no `.catch()` |
+| RPC error never checked — a summaries-refresh failure would be silent | `index.ts:313` |
+| `tsc --noEmit` emits **516 errors, 515 of them config noise** (no `@types/jest`; `supabase/functions` inside the TS project). Unusable as a CI gate. | `tsconfig.json` is 4 lines with no `exclude`. One real error: `SkeletonPulse.tsx:43` |
+| No global error boundary; no account-deletion flow (Apple + DPDP requirement) | root layout / settings |
+| `expo-notifications` installed but absent from `app.json` plugins; no `bundleIdentifier`/`package`/EAS id set | reminders = week 3; identity blocked on the name decision |
+| Local `ScalePress` duplicate in `app/(app)/index.tsx`; `@react-navigation/drawer` unused; dead `index.ts` + `App.tsx` Expo scaffold | cleanup |
+
+**Resolved 24 Aug (were listed as gaps, verified done):** `onboarding_data` column *exists* — migration already applied. Canonical biomarkers at **335**, not 23 — master seed is live, so the "expand toward ~100" task is closed and the slip lever *"cut canonical 100→50"* is void. A predicted `ON CONFLICT` defect in `refresh_biomarker_summaries` was **refuted** by direct execution against a member with duplicate readings.
+
+### Architecture (detail in `DATABASE.md` + `databaseSchema.sql`)
+- Two layers: append-only raw (`biomarkers` etc.) + computed (`biomarker_summaries`, refreshed by `refresh_biomarker_summaries()` window-function upsert per member).
+- `family_members` is the hub; every table carries `owner_id` with RLS `auth.uid() = owner_id`. **Single-owner model** — delegated access (two siblings, one parent) is a known future schema evolution; design before data hardens.
+- Canonical biomarker system: `canonical_name` FK + `aliases[]` resolves lab-name chaos; `raw_name` preserved.
+- Soft deletes (`deleted_at`) on family_members/reports/visits/medications; filtered indexes.
+- Phase-2 tables exist, unpopulated: `health_scores` (versioned), `wearable_daily_summaries`, `medication_adherence_log` (append-only).
+- Edge function: JWT verify → download from private bucket → Claude (`claude-sonnet-4-5`, max_tokens 16000, direct Anthropic API) → JSON parse → canonical resolve → bulk insert → summaries refresh. Storage: private `reports` bucket, `/{owner_id}/{member_id}/{report_id}/`, signed URLs only.
+- Cost ~₹2–25/report on Sonnet; fine at launch scale; cheaper first-pass model later.
+
+---
+
+## 4. The MVP plan (committed — revised 23 Aug 2026; strategy rationale in the frozen artifact §08, dates superseded here)
+
+**Hypothesis to validate: families, not individuals, activate.** **Android is the launch vehicle, iOS follows within days.** Launch on **email OTP**. Day 1 = Mon 24 Aug 2026 · Android beta with real families **22 Sep** · submit both stores **26 Oct** · **Android live ~30 Oct, iOS target Thu 5 Nov**.
+
+> **Code was never the constraint — paperwork is, and the bank account is the paperwork.** Founder decision (23 Aug): no company account opens before INC-20A is filed, and INC-20A needs the bank account. Chain: bank **25 Sep** → INC-20A **28 Sep** → D-U-N-S **~7 Oct** → store accounts **~mid Oct** → submit **26 Oct**. **Every day the bank account moves earlier, the launch moves with it** — that is the highest-leverage action available.
+
+> **The store date slipped five weeks; the learning date did not.** The beta runs on Android, off-store, from 22 Sep exactly as originally planned — a Firebase App Distribution build needs no Play account, no D-U-N-S, no INC-20A.
+
+**Entity: Ironstack Ventures Limited**, incorporated **27 Jul 2026** → INC-20A statutory deadline **23 Jan 2027** (153 days out — no compliance pressure; the pressure is pure sequencing). Company domain `ironstackventures.com` registered, email live — both satisfy Apple org-enrollment requirements. Product named separately (TBD).
+
+> **Founder away 3–7 Sep** (no hands-on work). Capacity math: +8 calendar days − 5 hands-on = **+3 net build days**. The real gain is the think week absorbing writing/spec work that used to eat weeks 3–4.
+
+- **Day 0 decisions:** app name **+ product domain as one coupled decision** (**hard deadline Wed 26 Aug** — also fixes the permanent bundle id; blocks EAS + listing; "HealthApp" is placeholder in `welcome.tsx`, `onboarding.tsx`, `app.json`) · seed list of 50 families (weight NRI organizers).
+
+### Corporate track — lives at the company layer now
+
+Company work (statutory compliance, banking, Apple/Play/Meta/D-U-N-S accounts) moved off this board on 23 Aug. **Detail: `~/Code/ironstack/COMPLIANCE.md` + the Ironstack Ventures boards in Notion.** The only thing this project needs to know:
+
+> **bank a/c (after 20 Sep) → INC-20A (~28 Sep) → D-U-N-S (~7 Oct) → Apple / Play / Meta (~8 Oct) → submit 26 Oct.** No company account opens before INC-20A (founder decision). Neither store needs a bank account for a free app, and the **Android beta on 22 Sep needs no store account at all** — which is why the build plan below is unaffected by any of it.
+
+- **Week 1 (24–30 Aug — revised 24 Aug):** ~~onboarding_data migration~~ (already applied) · ~~canonical expansion~~ (already at 335) · **error boundary** → **`supabase db pull`** → `pending_review` fix (4 parts — live CHECK constraint, type union, 3 else-branch count sites, FK on canonical_name) → **alias-conflation fix** → **family CRUD + per-adult consent; member picker on upload** → EAS pipeline + rename → cleanup.
+- **Week 2 (31 Aug–2 Sep, 3 days):** member switcher; **scope home/records/trends/report-detail by member** (kill every `is_primary` query). Both land *before* departure — never leave the never-cut architecture half-done across the gap. No TestFlight this month: all of Sep/early Oct runs on Expo dev-client + free provisioning on your own devices; first TestFlight is 16 Oct.
+- **Think week (3–7 Sep, away, no code):** delegated-access schema design (two siblings, one parent — design before data hardens); courses v1 spec; extraction eval rubric; events-table/metrics spec; store-listing copy + shot list; onboarding/first-run copy; seed outreach + beta interview script; Bedrock ap-south-1 vs zero-retention decision.
+- **Week 3 (8–13 Sep):** pilot extraction eval (10 reports, day back); **med reminders for any member on organizer's phone** → one-tap taken/skip → `medication_adherence_log` + streak; account deletion; data export (DPDP portability); report-complete push.
+- **Week 4 (14–20 Sep):** onboarding "add first family member"; bulk-import screen; **full extraction eval — 40–50 reports across 6+ labs until >90% capture**; own-events-table metrics; **privacy/DPDP page + support@ live 19 Sep** (the beta needs them, not the store).
+- **Week 5 (21–27 Sep):** **Android beta build via Firebase App Distribution (21 Sep) → 20–30 families (22 Sep)** — the thesis test, on the original schedule, with no store account involved; **bank account + subscription money deposited (25 Sep)**; weekly digest + out-of-range flag (Plus-gated post-launch, free preview at launch).
+- **Launch (early Nov):** white-glove seeding of 50–100 families (4 Nov); go/no-go; **iOS live target Thu 5 Nov**. Android GA lands earlier, ~30 Oct.
+- **Ambition added with the extra time:** courses v1 shell = start a course + adherence + retest reminder, **no verdict engine** (an 8–12 week retest window means no verdict can exist before ~Dec, so v1 doesn't need it); eval run twice and scaled; digest committed; data export; delegated-access design.
+- **Still out:** courses verdict engine (month 3), home vitals, payments, ABDM, cross-account alerts, health scores, HealthKit, calorie tracking (ever).
+- **Slip order:** digest + flag → ~~canonical count (100→50)~~ *(void — already at 335, nothing to cut)* → reminder polish. (WhatsApp left the list — month 2. Courses shell promoted to committed.) **October discipline:** that window is for beta iteration, not scope — no home vitals, no delegated-access build unless the beta demands it. **Never cut:** family CRUD + consent, member picker, member switcher, member-scoping, extraction eval, account deletion.
+- **Targets:** ≥40% upload within 24h · **≥30% add a 2nd member in week 1 (thesis metric)** · >90% eval extraction · measure D7.
+
+---
+
+## 5. Immediate next steps for a fresh session
+
+1. **Two boards now — company and product are separate.** Company-level work (statutory compliance, banking, Apple/Play/Meta/D-U-N-S accounts) moved OFF this project's board on 23 Aug into the **Ironstack Ventures** hub: https://app.notion.com/p/3c4afe337c73814aaa1ee391a9cca723 — holding *Compliance Calendar* and *Accounts & Vendors*, both relating back to the Projects database so you can see what blocks what. Context and reasoning live in `~/Code/ironstack` (COMPANY.md, COMPLIANCE.md, ACCOUNTS.md, research/, decisions/) — **that directory is deliberately not under version control and stays on this machine: do not `git init` it, add a remote, or offer to.** No version history there, so append and date rather than rewriting files wholesale. **The allocation rule: would you duplicate it if you started a fourth idea tomorrow? No → company layer.**
+   **This project's board** is now build-only: **"HealthApp Launch"** (49 rows) at https://app.notion.com/p/0ea17bc2de5b4fd287e45a9254f9071d — views *Board by week*, *Calendar*, *Never cut*, *Think week (3–7 Sep)*, *Gated work*. Properties: Task, Week (Day 0 / Week 1–2 / Think week / Week 3–5 / October / Launch), Type, Status, Never-cut, Gate, Due, Notes. Update both as work lands — do not create a third.
+2. On "go": start Week 1 in order (migration → error boundary → pending_review → family CRUD → member picker → EAS).
+3. Keep **this file** and the **Notion boards** updated as decisions land — the artifact is frozen, do not update it.
+
+**Open founder decisions:** app name + product domain (one decision, 26 Aug) · seed list. **Settled:** entity = Ironstack Ventures Limited (inc. 27 Jul 2026); no company accounts before INC-20A. **Scheduled:** Bedrock vs zero-retention disclosure (think week).
+
+**The one lever that moves everything:** the bank account date. It gates INC-20A → store accounts → launch. Pulling it to early September moves launch ~3 weeks earlier; run a parallel application at a second bank.
