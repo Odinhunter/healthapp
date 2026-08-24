@@ -1,8 +1,12 @@
-## graphify
+## Company context
 
-This project has a graphify knowledge graph at graphify-out/.
+This project is owned by **Ironstack Ventures Limited**. Company-level matters —
+statutory compliance, banking, platform accounts (Apple, Play, Meta, D-U-N-S) —
+live at `~/Code/ironstack`, not here.
 
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
+Before anything involving **platform accounts, contracts, payments, or launch
+dates**, read `~/Code/ironstack/COMPLIANCE.md` and `~/Code/ironstack/ACCOUNTS.md`.
+Company constraints bind product timelines: no company account opens before
+INC-20A is filed, and INC-20A waits on the bank account.
+
+Need both trees in one session: `claude --add-dir ~/Code/ironstack`
